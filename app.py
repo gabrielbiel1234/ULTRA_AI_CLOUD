@@ -1,5 +1,6 @@
 
 import os
+import time
 import logging
 import requests
 
@@ -143,27 +144,82 @@ def perguntar():
             erro="Configure GEMINI_API_KEY no Render."
         )
 
-    try:
-        url = (
-            "https://generativelanguage.googleapis.com/v1beta/models/"
-            + MODEL
-            + ":generateContent"
-        )
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        + MODEL
+        + ":generateContent"
+    )
 
-        resultado = requests.post(
-            url,
-            params={"key": GEMINI_KEY},
-            json={
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": pergunta}
-                        ]
-                    }
+    dados_envio = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": pergunta}
                 ]
-            },
-            timeout=60
-        )
+            }
+        ]
+    }
+
+    # Até 3 tentativas para erros temporários
+    max_tentativas = 3
+    codigos_temporarios = (429, 500, 502, 503, 504)
+
+    for tentativa in range(max_tentativas):
+        try:
+            resultado = requests.post(
+                url,
+                params={"key": GEMINI_KEY},
+                json=dados_envio,
+                timeout=60
+            )
+
+        except requests.exceptions.RequestException:
+            logging.exception(
+                "Falha de conexão na tentativa %s",
+                tentativa + 1
+            )
+
+            if tentativa < max_tentativas - 1:
+                espera = 2 ** (tentativa + 1)
+                logging.info("Nova tentativa em %s segundos", espera)
+                time.sleep(espera)
+                continue
+
+            return render_template_string(
+                HTML,
+                erro=(
+                    "Não foi possível conectar ao Gemini após "
+                    "3 tentativas. Tente novamente mais tarde."
+                )
+            )
+
+        if resultado.status_code in codigos_temporarios:
+            logging.warning(
+                "Gemini HTTP %s na tentativa %s de %s",
+                resultado.status_code,
+                tentativa + 1,
+                max_tentativas
+            )
+
+            if tentativa < max_tentativas - 1:
+                espera = 2 ** (tentativa + 1)
+                logging.info("Aguardando %s segundos", espera)
+                time.sleep(espera)
+                continue
+
+            logging.error(
+                "Gemini indisponível após 3 tentativas: %s",
+                resultado.text[:1500]
+            )
+
+            return render_template_string(
+                HTML,
+                erro=(
+                    "O Gemini está temporariamente sobrecarregado. "
+                    "Tentamos 3 vezes, mas não houve resposta. "
+                    "Aguarde um pouco e tente novamente."
+                )
+            )
 
         if not resultado.ok:
             logging.error(
@@ -181,6 +237,10 @@ def perguntar():
                 )
             )
 
+        # Resposta recebida com sucesso
+        break
+
+    try:
         dados = resultado.json()
         candidatos = dados.get("candidates", [])
 
@@ -217,11 +277,11 @@ def perguntar():
         )
 
     except Exception:
-        logging.exception("Falha na consulta Gemini")
+        logging.exception("Falha ao processar resposta Gemini")
 
         return render_template_string(
             HTML,
-            erro="Falha na conexão com o Gemini. Consulte os Logs."
+            erro="Falha ao processar a resposta do Gemini."
         )
 
 
