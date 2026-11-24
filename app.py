@@ -1,3 +1,4 @@
+import logging
 
 @app.route("/perguntar", methods=["POST"])
 def perguntar():
@@ -13,7 +14,7 @@ def perguntar():
             HTML,
             erro="Configure a chave GEMINI_API_KEY no painel do Render."
         )
-import logging
+
     try:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
@@ -68,5 +69,5 @@ import logging
         logging.error("Falha na consulta Gemini: %s", type(e).__name__)
         return render_template_string(
             HTML,
-            erro="Falha na conexão com o Gemini. Consulte os Logs do Render."import logging
+            erro="Falha na conexão com o Gemini. Consulte os Logs do Render."
         )
