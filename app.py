@@ -13,7 +13,7 @@ def perguntar():
             HTML,
             erro="Configure a chave GEMINI_API_KEY no painel do Render."
         )
-
+import logging
     try:
         url = (
             "https://generativelanguage.googleapis.com/v1beta/models/"
