@@ -68,5 +68,5 @@ def perguntar():
         logging.error("Falha na consulta Gemini: %s", type(e).__name__)
         return render_template_string(
             HTML,
-            erro="Falha na conexão com o Gemini. Consulte os Logs do Render."
+            erro="Falha na conexão com o Gemini. Consulte os Logs do Render."import logging
         )
