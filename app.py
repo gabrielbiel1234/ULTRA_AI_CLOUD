@@ -24,16 +24,19 @@ PASSWORD = os.environ.get("APP_PASSWORD", "")
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
+# Reutiliza conexões HTTP
+http = requests.Session()
+
 HTML = """
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ULTRA AI CLOUD</title>
+<title>ULTRA AI CLOUD TURBO</title>
 <style>
 body {
-    font-family: Arial;
+    font-family: Arial, sans-serif;
     background: #101827;
     color: white;
     margin: 0;
@@ -61,6 +64,10 @@ button {
     cursor: pointer;
     font-size: 16px;
 }
+button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
 .card {
     background: #1e293b;
     padding: 20px;
@@ -71,19 +78,24 @@ button {
     white-space: pre-wrap;
     line-height: 1.6;
 }
+#status {
+    color: #55d6be;
+    margin-top: 12px;
+}
 </style>
 </head>
 <body>
 <main>
-<h1>ULTRA AI CLOUD</h1>
+<h1>ULTRA AI CLOUD TURBO</h1>
 <p>Seu assistente de inteligência artificial</p>
 
 <div class="card">
-<form method="post" action="/perguntar">
+<form id="pergunta-form" method="post" action="/perguntar">
 <textarea name="pergunta"
 placeholder="Digite o que deseja fazer..."
 required></textarea>
-<button type="submit">Perguntar à IA</button>
+<button id="enviar" type="submit">Perguntar à IA</button>
+<p id="status"></p>
 </form>
 </div>
 
@@ -99,6 +111,19 @@ required></textarea>
 {% endif %}
 
 </main>
+
+<script>
+document.getElementById("pergunta-form").addEventListener(
+    "submit",
+    function() {
+        const botao = document.getElementById("enviar");
+        botao.disabled = true;
+        botao.textContent = "Consultando...";
+        document.getElementById("status").textContent =
+            "A IA está preparando sua resposta. Aguarde...";
+    }
+);
+</script>
 </body>
 </html>
 """
@@ -111,7 +136,7 @@ def inicio():
         <h2>ULTRA AI CLOUD</h2>
         <form method="post" action="/entrar">
         <input type="password" name="senha"
-        placeholder="Senha de acesso">
+        placeholder="Senha de acesso" required>
         <button>Entrar</button>
         </form>
         """
@@ -160,85 +185,77 @@ def perguntar():
         ]
     }
 
-    # Até 3 tentativas para erros temporários
-    max_tentativas = 3
-    codigos_temporarios = (429, 500, 502, 503, 504)
+    resultado = None
 
-    for tentativa in range(max_tentativas):
+    # Uma nova tentativa apenas para falhas temporárias
+    for tentativa in range(2):
         try:
-            resultado = requests.post(
+            resultado = http.post(
                 url,
                 params={"key": GEMINI_KEY},
                 json=dados_envio,
-                timeout=60
+                timeout=(10, 45)
             )
 
         except requests.exceptions.RequestException:
             logging.exception(
-                "Falha de conexão na tentativa %s",
+                "Falha de conexão com Gemini, tentativa %s",
                 tentativa + 1
             )
 
-            if tentativa < max_tentativas - 1:
-                espera = 2 ** (tentativa + 1)
-                logging.info("Nova tentativa em %s segundos", espera)
-                time.sleep(espera)
+            if tentativa == 0:
+                time.sleep(1)
                 continue
 
             return render_template_string(
                 HTML,
-                erro=(
-                    "Não foi possível conectar ao Gemini após "
-                    "3 tentativas. Tente novamente mais tarde."
-                )
+                erro="Falha de conexão. Tente novamente."
             )
 
-        if resultado.status_code in codigos_temporarios:
+        if resultado.status_code in (429, 500, 502, 503, 504):
             logging.warning(
-                "Gemini HTTP %s na tentativa %s de %s",
+                "Gemini HTTP %s, tentativa %s",
                 resultado.status_code,
-                tentativa + 1,
-                max_tentativas
+                tentativa + 1
             )
 
-            if tentativa < max_tentativas - 1:
-                espera = 2 ** (tentativa + 1)
-                logging.info("Aguardando %s segundos", espera)
-                time.sleep(espera)
+            if tentativa == 0:
+                time.sleep(1)
                 continue
 
-            logging.error(
-                "Gemini indisponível após 3 tentativas: %s",
-                resultado.text[:1500]
-            )
-
-            return render_template_string(
-                HTML,
-                erro=(
-                    "O Gemini está temporariamente sobrecarregado. "
-                    "Tentamos 3 vezes, mas não houve resposta. "
-                    "Aguarde um pouco e tente novamente."
-                )
-            )
-
-        if not resultado.ok:
-            logging.error(
-                "Erro Gemini HTTP %s: %s",
-                resultado.status_code,
-                resultado.text[:1500]
-            )
-
-            return render_template_string(
-                HTML,
-                erro=(
-                    "Erro do Gemini: HTTP "
-                    + str(resultado.status_code)
-                    + ". Consulte os Logs do Render."
-                )
-            )
-
-        # Resposta recebida com sucesso
         break
+
+    if resultado is None:
+        return render_template_string(
+            HTML,
+            erro="Não foi possível consultar a IA."
+        )
+
+    if not resultado.ok:
+        logging.error(
+            "Erro Gemini HTTP %s: %s",
+            resultado.status_code,
+            resultado.text[:1500]
+        )
+
+        if resultado.status_code == 503:
+            mensagem = (
+                "O Gemini está sobrecarregado. "
+                "Tente novamente em alguns instantes."
+            )
+        elif resultado.status_code == 429:
+            mensagem = (
+                "Limite de solicitações atingido. "
+                "Aguarde um pouco e tente novamente."
+            )
+        else:
+            mensagem = (
+                "Erro do Gemini: HTTP "
+                + str(resultado.status_code)
+                + ". Consulte os Logs do Render."
+            )
+
+        return render_template_string(HTML, erro=mensagem)
 
     try:
         dados = resultado.json()
@@ -276,12 +293,12 @@ def perguntar():
             resposta=resposta
         )
 
-    except Exception:
-        logging.exception("Falha ao processar resposta Gemini")
+    except (ValueError, TypeError, KeyError):
+        logging.exception("Erro ao interpretar resposta do Gemini")
 
         return render_template_string(
             HTML,
-            erro="Falha ao processar a resposta do Gemini."
+            erro="Não foi possível interpretar a resposta da IA."
         )
 
 
@@ -289,7 +306,7 @@ def perguntar():
 def health():
     return {
         "status": "online",
-        "app": "ULTRA AI CLOUD"
+        "app": "ULTRA AI CLOUD TURBO"
     }
 
 
